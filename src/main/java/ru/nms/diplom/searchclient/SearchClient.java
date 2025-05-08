@@ -1,6 +1,7 @@
 package ru.nms.diplom.searchclient;
 
 
+import com.google.protobuf.Empty;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import ru.nms.diplom.searchclient.service.MrrService;
@@ -13,6 +14,7 @@ import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import ru.nms.diplom.shardsearch.ShardSearchServiceGrpc;
 
 import static ru.nms.diplom.searchclient.service.DataFrameLoader.loadRelevantPassages;
 
@@ -20,13 +22,18 @@ public class SearchClient {
     public static void main(String[] args) {
         var mrrService = new MrrService();
         var stub = getSearchGatewayStub();
-//        executeTestCase(3000, 3000, 1.5f, mrrService, stub);
-//        executeTestCase(3000, 1000, 1.5f, mrrService, stub);
+        executeTestCase(3000, 3000, 1.5f, mrrService, stub);
+//        executeTestCase(1000, 3000, 1.25f, mrrService, stub);
+//        executeTestCase(1000, 3000, 1.0f, mrrService, stub);
+//        executeTestCase(1000, 1000, 1.5f, mrrService, stub);
+//        executeTestCase(1000, 1000, 1.25f, mrrService, stub);
+//        executeTestCase(1000, 1000, 1.0f, mrrService, stub);
+        gatherMetrics(6);
 //        executeTestCase(3000, 700, 1.5f, mrrService, stub);
-        executeTestCase(10000, 1000, 1.5f, mrrService, stub);
-        executeTestCase(10000, 1000, 1.7f, mrrService, stub);
-        executeTestCase(10000, 1000, 2f, mrrService, stub);
-        executeTestCase(10000, 1000, 0f, mrrService, stub);
+//        executeTestCase(1000, 500, 1.5f, mrrService, stub);
+//        executeTestCase(10000, 1000, 1.7f, mrrService, stub);
+//        executeTestCase(10000, 1000, 2f, mrrService, stub);
+//        executeTestCase(10000, 1000, 0f, mrrService, stub);
 
 //        executeTestCase(3000, 3000, 2f, mrrService, stub);
 //        executeTestCase(3000, 1000, 2f, mrrService, stub);
@@ -59,7 +66,7 @@ public class SearchClient {
     private static void executeTestCase(int queriesAmount, int k, float coefficient, MrrService mrrService, SearchGatewayServiceGrpc.SearchGatewayServiceBlockingStub stub) {
 
 
-        Map<String, Integer> relevantPassages = loadRelevantPassages("D:\\diplom\\data_v2\\relevant_passages.csv", queriesAmount);
+        Map<String, Integer> relevantPassages = loadRelevantPassages("./relevant_passages.csv", queriesAmount);
         var result = new HashMap<Integer, List<Document>>();
         float resultCounter = 0;
         boolean came25 = false;
@@ -107,7 +114,8 @@ public class SearchClient {
             }
         }
         System.out.println(
-                "\n\n\nMRR: " + mrrService.computeMRR(result, 5.4246, 0.7427)
+                "\n\n\nMRR with adjusted coeffs: " + mrrService.computeMRR(result, 5.4246, 0.7427)
+                        + ", \nMRR with only vector: " + mrrService.computeMRR(result, 1, 0)
                         + ", \nqueries amount: " + queriesAmount
                         + ", \noriginal K: " + k
                         + ", \nadjusted K: " + adjustedk
@@ -120,9 +128,88 @@ public class SearchClient {
     }
 
     private static SearchGatewayServiceGrpc.SearchGatewayServiceBlockingStub getSearchGatewayStub() {
-        ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", 8080)
+        ManagedChannel channel = ManagedChannelBuilder.forAddress("stgoxygensearch32445z503.h.o3.ru", 8080)
+//        ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", 8080)
                 .usePlaintext()
                 .build();
         return SearchGatewayServiceGrpc.newBlockingStub(channel);
+    }
+
+    private static void gatherMetrics(int nodesAmount) {
+        for (int i = 1; i <= nodesAmount; i++) {
+            ManagedChannel channel = ManagedChannelBuilder.forAddress("stgoxygensearch32445z503.h.o3.ru", 9090 + i)
+//        ManagedChannel channel = ManagedChannelBuilder.forAddress("localhost", 8080)
+                .usePlaintext()
+                .build();
+
+            var stub = ShardSearchServiceGrpc.newBlockingStub(channel);
+
+            var metricsData = stub.getMetricData(Empty.newBuilder().build());
+
+            double averageFaissSearchDocTime = 0;
+            double averageFaissSimilarityScoresTime = 0;
+            int faissSearchDocAmount = 0;
+            int faissSimilarityScoresAmount = 0;
+
+            double averageLuceneSearchDocTime = 0;
+            double averageLuceneSimilarityScoresTime = 0;
+            int luceneSearchDocAmount = 0;
+            int luceneSimilarityScoresAmount = 0;
+
+            double averageFaissProxySimilarityScoresTime = 0;
+            int faissProxySimilarityScoresAmount = 0;
+
+            double averageLuceneProxySimilarityScoresTime = 0;
+            int luceneProxySimilarityScoresAmount = 0;
+            for (var faissShardMetrics: metricsData.getFaissShardMetricsList()) {
+
+                var averageSearchDocTime = (double) faissShardMetrics.getSearchDocsTime() / faissShardMetrics.getAmountOfSearchDocsRequests();
+                var averageSimilarityScoresTime = (double) faissShardMetrics.getSimilarityDocsTime() / faissShardMetrics.getAmountOfSimilarityDocsRequests();
+
+                averageFaissSearchDocTime += averageSearchDocTime;
+                averageFaissSimilarityScoresTime += averageSimilarityScoresTime;
+                faissSearchDocAmount += faissShardMetrics.getAmountOfSearchDocsRequests();
+                faissSimilarityScoresAmount += faissShardMetrics.getAmountOfSimilarityDocsRequests();
+            }
+
+            for (var faissShardMetrics: metricsData.getFaissProxyShardMetricsList()) {
+
+                var averageSimilarityScoresTime = (double) faissShardMetrics.getSimilarityDocsTime() / faissShardMetrics.getAmountOfSimilarityDocsRequests();
+
+                averageFaissProxySimilarityScoresTime += averageSimilarityScoresTime;
+                faissProxySimilarityScoresAmount += faissShardMetrics.getAmountOfSimilarityDocsRequests();
+            }
+
+            for (var luceneShardMetrics: metricsData.getLuceneShardMetricsList()) {
+
+                var averageSearchDocTime = (double) luceneShardMetrics.getSearchDocsTime() / luceneShardMetrics.getAmountOfSearchDocsRequests();
+                var averageSimilarityScoresTime = (double) luceneShardMetrics.getSimilarityDocsTime() / luceneShardMetrics.getAmountOfSimilarityDocsRequests();
+
+                averageLuceneSearchDocTime += averageSearchDocTime;
+                averageLuceneSimilarityScoresTime += averageSimilarityScoresTime;
+                luceneSearchDocAmount += luceneShardMetrics.getAmountOfSearchDocsRequests();
+                luceneSimilarityScoresAmount += luceneShardMetrics.getAmountOfSimilarityDocsRequests();
+            }
+
+            for (var luceneShardMetrics: metricsData.getLuceneProxyShardMetricsList()) {
+
+                var averageSimilarityScoresTime = (double) luceneShardMetrics.getSimilarityDocsTime() / luceneShardMetrics.getAmountOfSimilarityDocsRequests();
+
+                averageLuceneProxySimilarityScoresTime += averageSimilarityScoresTime;
+                luceneProxySimilarityScoresAmount += luceneShardMetrics.getAmountOfSimilarityDocsRequests();
+            }
+            channel.shutdown();
+
+            System.out.println("\n\nNode " + i + "has following statistics");
+            System.out.println("\n\taverage search doc FAISS time: " + averageFaissSearchDocTime + ", requests amount: " + faissSearchDocAmount);
+            System.out.println("\n\taverage similarity FAISS time: " + averageFaissSimilarityScoresTime + ", requests amount: " + faissSimilarityScoresAmount);
+            System.out.println("\n\taverage similarity FAISS PROXY time: " + averageFaissProxySimilarityScoresTime + ", requests amount: " + faissProxySimilarityScoresAmount);
+            System.out.println("\n\taverage search doc LUCENE time: " + averageLuceneSearchDocTime + ", requests amount: " + luceneSearchDocAmount);
+            System.out.println("\n\taverage similarity LUCENE time: " + averageLuceneSimilarityScoresTime + ", requests amount: " + luceneSimilarityScoresAmount);
+            System.out.println("\n\taverage similarity LUCENE PROXY time: " + averageLuceneProxySimilarityScoresTime + ", requests amount: " + luceneProxySimilarityScoresAmount);
+            System.out.println("\n\toverall similarity requests amount: " + (faissProxySimilarityScoresAmount + luceneProxySimilarityScoresAmount + faissSimilarityScoresAmount + luceneSimilarityScoresAmount));
+            System.out.println("\n\toverall search doc requests amount: " + (faissSearchDocAmount + luceneSearchDocAmount));
+            System.out.println("\n\toverall requests amount: " + (faissSearchDocAmount + luceneSearchDocAmount + faissProxySimilarityScoresAmount + luceneProxySimilarityScoresAmount + faissSimilarityScoresAmount + luceneSimilarityScoresAmount));
+        }
     }
 }
